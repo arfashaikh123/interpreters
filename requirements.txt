@@ -1,11 +1,9 @@
 Flask
-Werkzeug
+pillow
 pytesseract
-Pillow
 PyMuPDF
-python-docx
+googletrans
 transformers
 torch
-joblib
-googletrans
-gunicorn
+asyncio
+re

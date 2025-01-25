@@ -1,35 +1,50 @@
-import os
 from flask import Flask, request, jsonify
-from werkzeug.utils import secure_filename
-import pytesseract
 from PIL import Image, ImageOps
+import pytesseract
 import fitz
-from docx import Document
 from transformers import BartTokenizer, BartForConditionalGeneration
-import torch
-import joblib
 from googletrans import Translator
+import os
+import asyncio
+import re
 
+# Initialize Flask app
 app = Flask(__name__)
 
-# Load the necessary models
-bart_model_name = "facebook/bart-large"
-bart_tokenizer = BartTokenizer.from_pretrained(bart_model_name)
-bart_model = BartForConditionalGeneration.from_pretrained(bart_model_name)
+# OCR Setup
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
+# Initialize BART model for summarization
+model_name = "facebook/bart-large-cnn"
+tokenizer = BartTokenizer.from_pretrained(model_name)
+model = BartForConditionalGeneration.from_pretrained(model_name)
+
+# Initialize the Translator for Translation
 translator = Translator()
 
-SUPPORTED_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.docx']
+# Function to process OCR from PDF or image
+def process_file(file_path):
+    _, file_extension = os.path.splitext(file_path)
+    file_extension = file_extension.lower()
+
+    if file_extension == ".pdf":
+        return process_pdf(file_path)
+    elif file_extension in [".png", ".jpg", ".jpeg"]:
+        return process_image(file_path)
+    else:
+        raise ValueError("Unsupported file type. Please upload a PDF, image, or Word document.")
 
 def process_pdf(pdf_path):
     pdf_document = fitz.open(pdf_path)
     extracted_text = ""
+
     for page_num in range(len(pdf_document)):
         page = pdf_document[page_num]
         pix = page.get_pixmap(dpi=300)
         image_path = f'temp_page_{page_num + 1}.png'
         pix.save(image_path)
         extracted_text += process_image(image_path)
+
     pdf_document.close()
     return extracted_text
 
@@ -39,56 +54,73 @@ def process_image(image_path):
     enhanced_image = ImageOps.autocontrast(gray_image)
     return pytesseract.image_to_string(enhanced_image)
 
-def process_word_doc(docx_path):
-    doc = Document(docx_path)
-    return "\n".join([paragraph.text for paragraph in doc.paragraphs])
-
-def process_file(file_path, processing_type):
-    _, file_extension = os.path.splitext(file_path)
-    file_extension = file_extension.lower()
-    if processing_type == 1:
-        if file_extension == ".pdf":
-            return process_pdf(file_path)
-        elif file_extension in [".png", ".jpg", ".jpeg"]:
-            return process_image(file_path)
-        else:
-            raise ValueError("Invalid file type for OCR.")
-    elif processing_type == 2:
-        return abstractive_summary_bart(file_path)
-    elif processing_type == 5:
-        return translate_text(file_path)
-    else:
-        raise ValueError("Unsupported processing type.")
-
+# Function for abstractive summarization using BART
 def abstractive_summary_bart(text, max_new_tokens=130, min_length=30):
-    inputs = bart_tokenizer(text, return_tensors="pt", max_length=1024, truncation=True)
-    summary_ids = bart_model.generate(inputs['input_ids'], max_length=max_new_tokens + len(inputs['input_ids'][0]), min_length=100, num_beams=5, early_stopping=True)
-    summary = bart_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    inputs = tokenizer(text, return_tensors="pt", max_length=1024, truncation=True)
+    summary_ids = model.generate(inputs['input_ids'], max_length=max_new_tokens, min_length=min_length, num_beams=5, early_stopping=True)
+    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
     return summary
 
-def translate_text(text):
-    translated = translator.translate(text, src='en', dest='hi')
+# Function for translation
+async def translate_text(text, dest_lang, src_lang='en'):
+    translated = await translator.translate(text, src=src_lang, dest=dest_lang)
     return translated.text
 
-@app.route('/process', methods=['POST'])
-def process_uploaded_file():
-    if 'file' not in request.files:
-        return 'No file part', 400
+@app.route('/process_file', methods=['POST'])
+def process_file_route():
     file = request.files['file']
-    if file.filename == '':
-        return 'No selected file', 400
+    class_type = request.form.get('class', type=int)
+    lang=request.form.get('language',type=str)
+    if not file or class_type not in [1, 2, 3]:
+        return jsonify({"error": "Invalid input. Provide a file and a valid class (1=OCR, 2=Summarization, 3=Translation)."}), 400
+
+    file_path = f"./{file.filename}"
+    file.save(file_path)
+
     try:
-        file_path = secure_filename(file.filename)
-        file.save(file_path)
-        print(f"File saved locally: {file_path}")
-        processing_type = int(request.form.get('processing_type', 1))
-        processed_text = process_file(file_path, processing_type)
-        os.remove(file_path)
-        return jsonify({"processed_text": processed_text})
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        # OCR
+        if class_type == 1:
+            extracted_text = process_file(file_path)
+            return jsonify({"extracted_text": extracted_text})
+
+        # Summarization
+        elif class_type == 2:
+            extracted_text = process_file(file_path)
+            summary = abstractive_summary_bart(extracted_text)
+            return jsonify({"summary": summary})
+
+        # Translation
+        elif class_type == 3:
+            extracted_text = process_file(file_path)
+            translated_text = asyncio.run(translate_text(extracted_text,lang))
+            return jsonify({"translated_text": translated_text})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/extract_dates', methods=['POST'])
+def extract_dates_route():
+    file = request.files['file']
+    if not file not in [1, 2, 3]:
+        return jsonify({"error": "Invalid input. Provide a file and a valid class (1=OCR, 2=Summarization, 3=Translation)."}), 400
+
+    file_path = f"./{file.filename}"
+    file.save(file_path)
+    text=process_file(file_path)
+    if not text:
+        return jsonify({"error": "No text provided for date extraction."}), 400
+
+    # Extract dates from the text
+    date_patterns = [
+        r"\d{1,2}[-/]\d{1,2}[-/]\d{4}",  # Matches formats like 15/08/2025 or 15-08-2025
+        r"\d{4}[-/]\d{1,2}[-/]\d{1,2}",  # Matches formats like 2025/08/15
+        r"\d{1,2}(th|st|nd|rd)?\s\w+\s\d{4}"  # Matches formats like 15th August 2025
+    ]
+    dates = []
+    for pattern in date_patterns:
+        dates.extend(re.findall(pattern, text))
+
+    return jsonify({"dates": dates})
 
 if __name__ == "__main__":
     app.run(debug=True)
