@@ -6,3 +6,4 @@ googletrans
 transformers
 torch
 asyncio
+gunicorn
