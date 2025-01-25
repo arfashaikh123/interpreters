@@ -1,0 +1,6 @@
+flask
+gunicorn
+pytesseract
+pillow
+python-docx
+fitz
