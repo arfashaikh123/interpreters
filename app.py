@@ -5,18 +5,14 @@ import pytesseract
 from PIL import Image, ImageOps
 import fitz
 from docx import Document
-from transformers import BartTokenizer, BartForConditionalGeneration, DistilBertTokenizer, DistilBertForSequenceClassification
+from transformers import BartTokenizer, BartForConditionalGeneration
 import torch
 import joblib
 from googletrans import Translator
 
 app = Flask(__name__)
 
-model = DistilBertForSequenceClassification.from_pretrained("best_model")
-label_encoder = joblib.load('label_encoder.pkl')
-
-tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
-
+# Load the necessary models
 bart_model_name = "facebook/bart-large"
 bart_tokenizer = BartTokenizer.from_pretrained(bart_model_name)
 bart_model = BartForConditionalGeneration.from_pretrained(bart_model_name)
@@ -59,10 +55,6 @@ def process_file(file_path, processing_type):
             raise ValueError("Invalid file type for OCR.")
     elif processing_type == 2:
         return abstractive_summary_bart(file_path)
-    elif processing_type == 3:
-        return predict_agreement_category(file_path)
-    elif processing_type == 4:
-        return bart_classification(file_path)
     elif processing_type == 5:
         return translate_text(file_path)
     else:
@@ -73,31 +65,6 @@ def abstractive_summary_bart(text, max_new_tokens=130, min_length=30):
     summary_ids = bart_model.generate(inputs['input_ids'], max_length=max_new_tokens + len(inputs['input_ids'][0]), min_length=100, num_beams=5, early_stopping=True)
     summary = bart_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
     return summary
-
-def bart_classification(text):
-    sentences = text.split('\n')
-    classifications = []
-    for sentence in sentences:
-        if sentence.strip():
-            inputs = bart_tokenizer("Classify the following: " + sentence, return_tensors="pt", max_length=1024, truncation=True)
-            outputs = bart_model.generate(inputs['input_ids'], max_length=50, num_beams=5, early_stopping=True)
-            classification = bart_tokenizer.decode(outputs[0], skip_special_tokens=True)
-            if "date" not in classification.lower() and "no date found" not in classification.lower():
-                classification = "No relevant classification found."
-            classifications.append(f"Sentence: {sentence}\nClassification: {classification}\n")
-    return "\n".join(classifications)
-
-def predict_agreement_category(text):
-    input_seq = tokenizer([text], padding='max_length', truncation=True, max_length=50, return_tensors="pt")
-    input_ids = input_seq['input_ids']
-    attention_mask = input_seq['attention_mask']
-    model.eval()
-    with torch.no_grad():
-        outputs = model(input_ids, attention_mask=attention_mask)
-        logits = outputs.logits
-        predicted_class = torch.argmax(logits, dim=-1).item()
-    predicted_label = label_encoder.inverse_transform([predicted_class])[0]
-    return predicted_label
 
 def translate_text(text):
     translated = translator.translate(text, src='en', dest='hi')
