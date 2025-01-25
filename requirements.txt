@@ -6,4 +6,3 @@ googletrans
 transformers
 torch
 asyncio
-re
