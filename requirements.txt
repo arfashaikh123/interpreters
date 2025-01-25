@@ -1,6 +1,10 @@
-flask
-gunicorn
+Flask
+Werkzeug
 pytesseract
-pillow
+Pillow
+PyMuPDF
 python-docx
-pymupdf
+transformers
+torch
+joblib
+googletrans
